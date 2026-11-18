@@ -13,7 +13,9 @@ EPISODES = [
      "rating": {"average": 7.5}, "summary": "<p>Start.</p>"},
     {"id": 12, "season": 1, "number": 2, "name": "Second", "airdate": "2020-01-08", "runtime": 30,
      "rating": {"average": 8.5}, "summary": "<p>More.</p>"},
-    {"id": 13, "season": 1, "number": None, "name": "Special", "airdate": "2020-02-01", "runtime": 30,
+    {"id": 21, "season": 2, "number": 1, "name": "Return", "airdate": "2021-01-08", "runtime": 30,
+     "rating": {"average": 9.0}, "summary": "<p>Back.</p>"},
+    {"id": 13, "season": 1, "number": None, "name": "Holiday Special", "airdate": "2020-02-01", "runtime": 30,
      "rating": {"average": None}, "summary": None},
 ]
 
@@ -31,7 +33,7 @@ class FakeClient:
         return EPISODES if specials else [e for e in EPISODES if e["number"] is not None]
 
     def get_cast(self, show_id):
-        return [{"person": {"id": 5, "name": "Ann Actor"}, "character": {"name": "Hero"}}]
+        return [{"person": {"id": 5, "name": "Ann Actor", "image": None}, "character": {"name": "Hero"}}]
 
     def search_people(self, q):
         return [{"id": 5, "name": "Ann Actor", "birthday": "1980-01-01", "country": {"name": "UK"}}]
@@ -56,42 +58,69 @@ def app(tmp_path, monkeypatch):
     return at
 
 
+def page_text(at) -> str:
+    return "\n".join(m.value for m in at.markdown)
+
+
 def go(at, page):
-    at.sidebar.radio(key="page").set_value(page).run()
+    at.radio(key="page").set_value(page).run()
+    assert not at.exception
+
+
+def open_demo(at):
+    at.text_input(key="query").input("demo").run()
+    assert "Demo Show" in page_text(at)
+    at.button(key="open_1").click().run()
     assert not at.exception
 
 
 def test_search_open_show_and_list_all_episodes(app):
-    app.text_input(key="query").input("demo").run()
-    assert "Demo Show" in app.markdown[0].value or any("Demo Show" in m.value for m in app.markdown)
-    app.button(key="open_1").click().run()
+    open_demo(app)
+    text = page_text(app)
+    for expected in ("S01E01", "Pilot", "S01E02", "S02E01", "Return"):
+        assert expected in text
+    assert "Holiday Special" not in text
+    app.toggle(key="specials_1").set_value(True).run()
     assert not app.exception
-    assert any("S01E01 · Pilot" in m.value for m in app.markdown)
-    app.checkbox(key="specials_1").check().run()
-    assert any("S01 Special" in m.value for m in app.markdown)
+    assert "S01 Special" in page_text(app) and "Holiday Special" in page_text(app)
 
 
 def test_follow_and_tick_episode(app):
-    app.text_input(key="query").input("demo").run()
-    app.button(key="open_1").click().run()
-    follow = next(b for b in app.button if "Follow" in b.label)
-    follow.click().run()
+    open_demo(app)
+    next(b for b in app.button if "Follow" in b.label).click().run()
     assert not app.exception
     app.checkbox(key="w_1_11").check().run()
     assert not app.exception
     go(app, "My shows")
-    assert any("Up next" in m.value and "Second" in m.value for m in app.markdown)
+    text = page_text(app)
+    assert "Up next" in text and "Second" in text and "1 of 3 aired episodes watched" in text
 
 
 def test_other_pages_render(app):
-    for page in ("My shows", "Cast crossover", "Six degrees", "Higher or lower", "About"):
+    for page in ("My shows", "Crossover", "Six degrees", "Higher or lower", "About"):
         go(app, page)
 
 
-def test_six_degrees_finds_same_show(app):
+def test_crossover_shows_shared_actor(app):
+    go(app, "Crossover")
+    app.text_input(key="xa_q").input("demo").run()
+    app.text_input(key="xb_q").input("other").run()
+    app.selectbox(key="xb_sel").select_index(1).run()
+    assert not app.exception
+    assert "Ann Actor" in page_text(app)
+
+
+def test_six_degrees_finds_connection(app):
     go(app, "Six degrees")
     app.text_input(key="pa_q").input("ann").run()
     app.text_input(key="pb_q").input("ann").run()
-    app.button[0].click().run()
+    app.button(key="find").click().run()
     assert not app.exception
     assert any("Connected" in s.value for s in app.success)
+
+
+def test_game_round(app):
+    go(app, "Higher or lower")
+    app.button(key="guess_a").click().run()
+    assert not app.exception
+    assert "Correct!" in page_text(app) or "Wrong." in page_text(app)

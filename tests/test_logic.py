@@ -109,7 +109,7 @@ def test_shared_cast():
     a = [member(1, "Zoe", "Ann"), member(2, "Bob", "Ben"), member(2, "Bob", "Ben's twin")]
     b = [member(2, "Bob", "Carl"), member(3, "Cy", "Dee")]
     assert logic.shared_cast(a, b) == [
-        {"person_id": 2, "name": "Bob", "character_a": "Ben, Ben's twin", "character_b": "Carl"}
+        {"person_id": 2, "name": "Bob", "image": None, "character_a": "Ben, Ben's twin", "character_b": "Carl"}
     ]
     assert logic.shared_cast(a, [member(3, "Cy", "Dee")]) == []
 

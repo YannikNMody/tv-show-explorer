@@ -1,23 +1,30 @@
 """TV Show Explorer: a Streamlit app on top of the TVmaze API.
 
 Run with:  streamlit run app.py
+Design: Apple-inspired (see style.css and .streamlit/config.toml).
 """
 from __future__ import annotations
 
+import html
 import json
 import random
 from datetime import date
+from pathlib import Path
 
+import altair as alt
 import pandas as pd
 import streamlit as st
 
 from tvmaze import logic, tracker
 from tvmaze.client import ApiError, NotFoundError, TVMazeClient
 
-st.set_page_config(page_title="TV Show Explorer", page_icon="📺", layout="wide")
+st.set_page_config(page_title="TV Show Explorer", page_icon="📺", layout="wide", initial_sidebar_state="collapsed")
 
-PAGES = ["Search & episodes", "My shows", "Cast crossover", "Six degrees", "Higher or lower", "About"]
+HERE = Path(__file__).parent
+PAGES = ["Search", "My shows", "Crossover", "Six degrees", "Higher or lower", "About"]
 WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+ACCENT = "#0071e3"
+FONT = "-apple-system, BlinkMacSystemFont, 'SF Pro Text', Inter, 'Helvetica Neue', Arial, sans-serif"
 
 
 @st.cache_resource
@@ -32,7 +39,66 @@ if "tracker" not in st.session_state:
 data = st.session_state.tracker
 
 
-# ------------------------------------------------------------------ helpers
+# ====================================================================== helpers
+
+def esc(value) -> str:
+    return html.escape(str(value if value is not None else ""))
+
+
+def img_url(item: dict | None) -> str:
+    """Medium image URL from a TVmaze show/person/episode, only if it is https."""
+    url = ((item or {}).get("image") or {}).get("medium") or ""
+    return esc(url) if url.startswith("https://") else ""
+
+
+def poster_html(item: dict | None, round_: bool = False, fallback: str = "📺") -> str:
+    url = img_url(item)
+    inner = f'<img src="{url}" alt="" loading="lazy">' if url else fallback
+    return f'<div class="poster{" round" if round_ else ""}">{inner}</div>'
+
+
+def rating_html(value) -> str:
+    return f'<span class="rating"><span class="star">★</span> {value:.1f}</span>' if value is not None \
+        else '<span class="rating muted">No rating</span>'
+
+
+def pills(*items: str, kind: str = "") -> str:
+    return "".join(f'<span class="pill {kind}">{esc(i)}</span>' for i in items if i)
+
+
+def html_block(markup: str, target=None) -> None:
+    (target or st).markdown(markup, unsafe_allow_html=True)
+
+
+def panel(key: str, title: str, subtitle: str = ""):
+    box = st.container(key=f"panel-{key}")
+    sub = f'<p class="panel-sub">{esc(subtitle)}</p>' if subtitle else ""
+    html_block(f'<p class="panel-title">{esc(title)}</p>{sub}', box)
+    return box
+
+
+def kpis(tiles: list[tuple[str, str, str]]) -> None:
+    html_block('<div class="kpis">' + "".join(
+        f'<div class="kpi"><div class="label">{esc(label)}</div><div class="value">{esc(value)}</div>'
+        f'<div class="note">{esc(note)}</div></div>' for label, value, note in tiles) + "</div>")
+
+
+def spacer(size: str = "medium") -> None:
+    """Vertical breathing room (works on every Streamlit version)."""
+    height = {"small": 8, "medium": 20, "large": 40}[size]
+    html_block(f'<div style="height:{height}px"></div>')
+
+
+def empty_state(text: str) -> None:
+    html_block(f'<p class="muted center" style="padding:2.5rem 0">{esc(text)}</p>')
+
+
+def style_chart(chart: alt.Chart, height: int = 240) -> alt.Chart:
+    return (chart.properties(height=height, background="transparent")
+            .configure_view(stroke=None)
+            .configure_axis(labelFont=FONT, titleFont=FONT, labelColor="#6e6e73", titleColor="#6e6e73",
+                            labelFontSize=12, titleFontSize=12, gridColor="#ececf0", domain=False, tickColor="#ececf0"))
+
 
 def save_tracker() -> None:
     tracker.save(st.session_state.tracker)
@@ -48,6 +114,8 @@ def api(fn, *args, **kwargs):
         st.error(str(exc))
     return None
 
+
+# ---------------------------------------------------------------- callbacks
 
 def open_show(show_id: int) -> None:
     st.session_state.show_id = show_id
@@ -67,8 +135,7 @@ def toggle_follow(show: dict) -> None:
 
 
 def toggle_watched(show_id: int, episode_id: int) -> None:
-    checked = st.session_state[f"w_{show_id}_{episode_id}"]
-    tracker.set_watched(data, show_id, [episode_id], checked)
+    tracker.set_watched(data, show_id, [episode_id], st.session_state[f"w_{show_id}_{episode_id}"])
     save_tracker()
 
 
@@ -79,18 +146,10 @@ def mark_season(show_id: int, episode_ids: list[int], watched: bool) -> None:
     save_tracker()
 
 
-def show_line(show: dict) -> str:
-    genres = ", ".join(show.get("genres") or []) or "no genre"
-    rating = logic.rating_of(show)
-    return (
-        f"**{show['name']}** ({logic.year_of(show)}) · {logic.channel_of(show)} · {genres} · "
-        f"★ {rating if rating is not None else '–'} · {show.get('status', '')}"
-    )
-
+# ------------------------------------------------------------------ pickers
 
 def show_picker(label: str, key: str) -> dict | None:
-    """Search box + dropdown to choose one show."""
-    query = st.text_input(label, key=f"{key}_q")
+    query = st.text_input(label, key=f"{key}_q", placeholder="Search a show")
     if not query:
         return None
     results = api(client.search_shows, query)
@@ -98,15 +157,12 @@ def show_picker(label: str, key: str) -> dict | None:
         if results == []:
             st.warning(f"No shows found for “{query}”.")
         return None
-    return st.selectbox(
-        "Pick the right one", results, key=f"{key}_sel",
-        format_func=lambda s: f"{s['name']} ({logic.year_of(s)}, {logic.channel_of(s)})",
-    )
+    return st.selectbox("Pick the right one", results, key=f"{key}_sel", label_visibility="collapsed",
+                        format_func=lambda s: f"{s['name']} ({logic.year_of(s)}, {logic.channel_of(s)})")
 
 
 def person_picker(label: str, key: str) -> dict | None:
-    """Search box + dropdown to choose one person."""
-    query = st.text_input(label, key=f"{key}_q")
+    query = st.text_input(label, key=f"{key}_q", placeholder="Search an actor")
     if not query:
         return None
     results = api(client.search_people, query)
@@ -114,84 +170,129 @@ def person_picker(label: str, key: str) -> dict | None:
         if results == []:
             st.warning(f"No people found for “{query}”.")
         return None
-    return st.selectbox(
-        "Pick the right one", results, key=f"{key}_sel",
-        format_func=lambda p: f"{p['name']} ({(p.get('birthday') or '?')[:4]}, {(p.get('country') or {}).get('name', '?')})",
-    )
+    return st.selectbox("Pick the right one", results, key=f"{key}_sel", label_visibility="collapsed",
+                        format_func=lambda p: f"{p['name']} ({(p.get('birthday') or '?')[:4]}, "
+                                              f"{(p.get('country') or {}).get('name', '?')})")
 
 
-# ------------------------------------------------------- search & show page
+def show_card(container, show: dict, key_prefix: str, width: int = 196) -> None:
+    card = container.container(key=f"card-{key_prefix}-{show['id']}", width=width)
+    html_block(
+        poster_html(show)
+        + f'<div class="card-eyebrow">{esc(logic.channel_of(show))} · {esc(logic.year_of(show))}</div>'
+        + f'<div class="card-title" title="{esc(show["name"])}">{esc(show["name"])}</div>'
+        + f'<div class="card-meta">{rating_html(logic.rating_of(show))}'
+        + f'{pills(show.get("status"), kind="green" if show.get("status") == "Running" else "")}</div>', card)
+    card.button("Open", key=f"open_{show['id']}" if key_prefix == "res" else f"{key_prefix}_open_{show['id']}",
+                on_click=open_show, args=(show["id"],), type="tertiary")
+
+
+# ================================================================ search page
 
 def page_search() -> None:
-    st.title("📺 TV Show Explorer")
-    query = st.text_input("Search for a show", key="query", placeholder="e.g. Severance", on_change=close_show)
-
     if st.session_state.get("show_id"):
-        st.button("← Back to results", on_click=close_show)
+        st.button("← Back to results", on_click=close_show, type="tertiary")
         render_show(st.session_state.show_id)
         return
 
+    html_block('<div class="hero"><p class="eyebrow">Powered by TVmaze</p>'
+               '<h1>Every show. Every episode.</h1>'
+               '<p class="sub">Search any TV show, see all of its episodes, and find out which ones are worth '
+               'your evening.</p></div>')
+    box = st.container(key="searchbox")
+    query = box.text_input("Search for a show", key="query", placeholder="Search a show, e.g. Severance",
+                           on_change=close_show, label_visibility="collapsed")
     if not query:
-        st.info("Type a show name to start. Typos are fine: TVmaze uses fuzzy search.")
+        empty_state("Typos are fine: TVmaze uses fuzzy search.")
         return
     results = api(client.search_shows, query)
     if results is None:
         return
     if not results:
-        st.warning(f"No shows found for “{query}”.")
+        empty_state(f"No shows found for “{query}”.")
         return
-    st.caption(f"{len(results)} results, best match first")
+    html_block(f'<p class="muted" style="margin:0 0 1rem">{len(results)} results, best match first</p>')
+    grid = st.container(horizontal=True, gap="medium", key="results")
     for show in results:
-        cols = st.columns([1, 6, 1])
-        image = (show.get("image") or {}).get("medium")
-        if image:
-            cols[0].image(image, width=70)
-        cols[1].markdown(show_line(show))
-        cols[2].button("Open", key=f"open_{show['id']}", on_click=open_show, args=(show["id"],))
+        show_card(grid, show, "res")
 
 
 def render_show(show_id: int) -> None:
     show = api(client.get_show, show_id, embed=["nextepisode"])
     if not show:
         return
+    episodes = api(client.get_episodes, show_id) or []
     followed = tracker.is_followed(data, show_id)
 
-    left, right = st.columns([1, 4])
-    image = (show.get("image") or {}).get("medium")
-    if image:
-        left.image(image)
+    left, right = st.columns([1, 3.2], gap="large")
+    url = img_url(show)
+    html_block(f'<div class="show-poster"><img src="{url}" alt=""></div>' if url else poster_html(None), left)
     with right:
-        st.header(show["name"])
-        st.markdown(show_line(show))
-        ended = show.get("ended") or ("now" if show.get("status") == "Running" else "?")
-        st.caption(f"Aired {show.get('premiered') or '?'} to {ended} · {show.get('language') or ''} · "
-                   f"[TVmaze page]({show['url']})")
-        st.write(logic.strip_html(show.get("summary")))
+        ended = show.get("ended") or ("today" if show.get("status") == "Running" else "?")
+        html_block(
+            f'<div class="show-eyebrow">{esc(logic.channel_of(show))} · {esc((show.get("premiered") or "?")[:4])}'
+            f'–{esc(ended[:4] if ended != "today" else "today")}</div>'
+            f'<div class="show-title">{esc(show["name"])}</div>'
+            f'<div>{rating_html(logic.rating_of(show))} &nbsp; '
+            f'{pills(show.get("status"), kind="green" if show.get("status") == "Running" else "")}'
+            f'{pills(*(show.get("genres") or []), kind="blue")}{pills(show.get("language"))}</div>'
+            f'<p class="show-summary">{esc(logic.strip_html(show.get("summary")))}</p>')
         nxt = show.get("_embedded", {}).get("nextepisode")
         if nxt:
-            st.info(f"Next new episode: {logic.episode_code(nxt)} “{nxt['name']}” on {nxt.get('airdate') or 'TBA'}")
-        st.button("★ Unfollow" if followed else "☆ Follow (track what you watch)",
-                  on_click=toggle_follow, args=(show,))
+            html_block(f'<div class="next-up">Next new episode: <b>{esc(logic.episode_code(nxt))} '
+                       f'“{esc(nxt["name"])}”</b> on {esc(nxt.get("airdate") or "TBA")}</div>')
+        b1, b2 = st.columns([1.3, 1])
+        b1.button("✓ Following" if followed else "+ Follow this show", on_click=toggle_follow, args=(show,),
+                  type="secondary" if followed else "primary", width="stretch")
+        b2.link_button("Open on TVmaze", show["url"], width="stretch")
+
+    spacer("medium")
+    seasons = logic.group_by_season(episodes)
+    summary = logic.rating_summary(episodes)
+    avg = [r for r in summary["season_avgs"].values()]
+    total = sum(logic.episode_minutes(e, show.get("averageRuntime")) for e in episodes)
+    kpis([
+        ("Seasons", str(len(seasons)), f"{len(episodes)} episodes"),
+        ("Total runtime", logic.format_minutes(total) if total else "–", "to watch it all"),
+        ("Average episode", f"★ {sum(avg) / len(avg):.1f}" if avg else "–",
+         f"{summary['share_rated']:.0%} of episodes rated" if episodes else ""),
+        ("Your progress", f"{len(tracker.watched_ids(data, show_id) & {e['id'] for e in episodes})}/{len(episodes)}"
+         if followed else "–", "episodes watched" if followed else "follow to track"),
+    ])
 
     tab_eps, tab_heat, tab_binge, tab_cast = st.tabs(["All episodes", "Rating heatmap", "Binge plan", "Cast"])
     with tab_eps:
         render_episodes(show, followed)
     with tab_heat:
-        render_heatmap(show)
+        render_heatmap(episodes)
     with tab_binge:
-        render_binge(show, followed)
+        render_binge(show, episodes, followed)
     with tab_cast:
         render_cast(show)
 
 
+def episode_html(ep: dict, hidden: bool, watched: bool) -> str:
+    rating = logic.rating_of(ep)
+    meta = f'{esc(ep.get("airdate") or "TBA")} · {esc(ep.get("runtime") or "?")} min' + \
+           (f' · <span class="star" style="color:var(--star)">★</span> {rating:.1f}' if rating is not None else "")
+    summary = logic.strip_html(ep.get("summary"))
+    if hidden and summary:
+        sum_html = '<div class="ep-sum hidden">Summary hidden (spoiler-free mode)</div>'
+    else:
+        sum_html = f'<div class="ep-sum">{esc(summary)}</div>' if summary else ""
+    return (f'<div class="ep{" watched" if watched else ""}"><div class="ep-code">{esc(logic.episode_code(ep))}</div>'
+            f'<div class="ep-name">{esc(ep["name"])}</div><div class="ep-meta">{meta}</div>{sum_html}</div>')
+
+
 def render_episodes(show: dict, followed: bool) -> None:
     show_id = show["id"]
-    specials = st.checkbox("Include specials", key=f"specials_{show_id}")
+    c1, c2 = st.columns([3, 1], vertical_alignment="center")
+    specials = c2.toggle("Include specials", key=f"specials_{show_id}")
     episodes = api(client.get_episodes, show_id, specials=specials)
     if episodes is None:
         return
     if not episodes:
-        st.info("TVmaze lists no episodes for this show yet.")
+        empty_state("TVmaze lists no episodes for this show yet.")
         return
 
     watched = tracker.watched_ids(data, show_id) if followed else set()
@@ -199,137 +300,156 @@ def render_episodes(show: dict, followed: bool) -> None:
     position = {ep["id"]: i for i, ep in enumerate(episodes)}
     upcoming = tracker.next_unwatched(episodes, watched) if followed else None
     hide_after = position[upcoming["id"]] if (spoiler_free and upcoming) else None
-
     seasons = logic.group_by_season(episodes)
-    st.caption(f"{len(episodes)} episodes in {len(seasons)} seasons"
-               + (" · spoiler-free mode is on" if spoiler_free else ""))
-    if not followed:
-        st.caption("Follow the show to tick off episodes you have watched.")
+    note = " · spoiler-free mode is on" if spoiler_free else ("" if followed else " · follow the show to tick off episodes")
+    html_block(f'<p class="muted">{len(episodes)} episodes in {len(seasons)} seasons{esc(note)}</p>', c1)
 
     for season, eps in seasons.items():
         done = sum(ep["id"] in watched for ep in eps)
-        label = f"Season {season} · {len(eps)} episodes" + (f" · {done}/{len(eps)} watched" if followed else "")
+        label = f"Season {season}  ·  {len(eps)} episodes" + (f"  ·  {done}/{len(eps)} watched" if followed else "")
         with st.expander(label, expanded=len(seasons) == 1):
-            if followed:
-                ids = [ep["id"] for ep in eps]
-                b1, b2, _ = st.columns([1, 1, 4])
-                b1.button("Mark season watched", key=f"sw_{show_id}_{season}", on_click=mark_season, args=(show_id, ids, True))
-                b2.button("Mark season unwatched", key=f"su_{show_id}_{season}", on_click=mark_season, args=(show_id, ids, False))
+            if not followed:
+                html_block("".join(episode_html(ep, False, False) for ep in eps))
+                continue
+            ids = [ep["id"] for ep in eps]
+            b1, b2, _ = st.columns([1, 1, 3])
+            b1.button("Mark season watched", key=f"sw_{show_id}_{season}", on_click=mark_season,
+                      args=(show_id, ids, True), type="tertiary")
+            b2.button("Mark season unwatched", key=f"su_{show_id}_{season}", on_click=mark_season,
+                      args=(show_id, ids, False), type="tertiary")
             for ep in eps:
-                rating = logic.rating_of(ep)
-                line = (f"**{logic.episode_code(ep)} · {ep['name']}** · {ep.get('airdate') or 'TBA'} · "
-                        f"{ep.get('runtime') or '?'} min · ★ {rating if rating is not None else '–'}")
-                if followed:
-                    key = f"w_{show_id}_{ep['id']}"
-                    if key not in st.session_state:
-                        st.session_state[key] = ep["id"] in watched
-                    st.checkbox(line, key=key, on_change=toggle_watched, args=(show_id, ep["id"]))
-                else:
-                    st.markdown(line)
-                summary = logic.strip_html(ep.get("summary"))
+                key = f"w_{show_id}_{ep['id']}"
+                if key not in st.session_state:
+                    st.session_state[key] = ep["id"] in watched
                 hidden = hide_after is not None and position[ep["id"]] > hide_after and ep["id"] not in watched
-                if summary and hidden:
-                    st.caption("Summary hidden (spoiler-free mode)")
-                elif summary:
-                    st.caption(summary)
+                row = st.container(key=f"eprow-{show_id}-{ep['id']}")
+                box, body = row.columns([0.35, 10], gap="small")
+                box.checkbox("Watched", key=key, on_change=toggle_watched, args=(show_id, ep["id"]),
+                             label_visibility="collapsed")
+                html_block(episode_html(ep, hidden, ep["id"] in watched), body)
 
 
-def render_heatmap(show: dict) -> None:
-    episodes = api(client.get_episodes, show["id"])
+def render_heatmap(episodes: list[dict]) -> None:
     if not episodes:
-        st.info("No episodes to show.")
+        empty_state("No episodes to show.")
         return
     grid = logic.rating_grid(episodes)
     summary = logic.rating_summary(episodes)
     if summary["share_rated"] == 0:
-        st.info("None of the episodes has a rating on TVmaze yet.")
+        empty_state("None of the episodes has a rating on TVmaze yet.")
         return
-    if summary["share_rated"] < 0.5:
-        st.warning(f"Only {summary['share_rated']:.0%} of episodes have a rating, so the grid has gaps.")
-
+    names = {(e["season"], e["number"]): e["name"] for e in episodes if e.get("number") is not None}
     max_episode = max(max(eps) for eps in grid.values())
-    frame = pd.DataFrame(
-        [[grid[s].get(n) for n in range(1, max_episode + 1)] for s in grid],
-        index=[f"Season {s}" for s in grid],
-        columns=[f"E{n}" for n in range(1, max_episode + 1)],
-        dtype="float",
-    )
-    styled = frame.style.map(lambda v: f"background-color: {logic.rating_color(v)}; color: #111").format("{:.1f}", na_rep="")
-    st.caption("Each cell is one episode, coloured from red (weak) to green (great). Grey = no rating.")
-    st.dataframe(styled, use_container_width=True)
+
+    rows = ['<div class="heat-row heat-head"><div class="heat-label"></div>'
+            + "".join(f'<div class="heat-cell">{n}</div>' for n in range(1, max_episode + 1)) + "</div>"]
+    for season, eps in grid.items():
+        cells = []
+        for n in range(1, max_episode + 1):
+            if n not in eps:
+                cells.append('<div class="heat-cell empty"></div>')
+                continue
+            value = eps[n]
+            tip = f'S{season:02d}E{n:02d} · {names.get((season, n), "")} · {value if value is not None else "no rating"}'
+            cells.append(f'<div class="heat-cell" style="background:{logic.rating_color(value)}" title="{esc(tip)}">'
+                         f'{"" if value is None else f"{value:.1f}"}</div>')
+        rows.append(f'<div class="heat-row"><div class="heat-label">S{season}</div>{"".join(cells)}</div>')
+
+    with panel("heatmap", "Episode ratings", "One cell per episode. Hover a cell for its title."):
+        if summary["share_rated"] < 0.5:
+            st.caption(f"Only {summary['share_rated']:.0%} of episodes have a rating, so the grid has gaps.")
+        html_block(f'<div class="heat">{"".join(rows)}</div>'
+                   '<div class="legend">6.0 <span class="bar"></span> 9.5 <span class="none"></span> no rating</div>')
 
     best, worst = summary["best"], summary["worst"]
-    c1, c2 = st.columns(2)
-    c1.success(f"Best: {logic.episode_code(best)} “{best['name']}” ★ {logic.rating_of(best)}")
-    c2.error(f"Weakest: {logic.episode_code(worst)} “{worst['name']}” ★ {logic.rating_of(worst)}")
-    st.subheader("Average rating per season")
-    st.bar_chart(pd.Series({f"S{s}": avg for s, avg in summary["season_avgs"].items()}, name="rating"))
+    spacer("small")
+    kpis([
+        ("Best episode", f"★ {logic.rating_of(best):.1f}", f"{logic.episode_code(best)} · {best['name']}"),
+        ("Weakest episode", f"★ {logic.rating_of(worst):.1f}", f"{logic.episode_code(worst)} · {worst['name']}"),
+    ])
+    if len(summary["season_avgs"]) > 1:
+        frame = pd.DataFrame({"Season": [f"S{s}" for s in summary["season_avgs"]],
+                              "Rating": list(summary["season_avgs"].values())})
+        low = max(min(frame["Rating"]) - 0.5, 0)
+        chart = alt.Chart(frame).mark_bar(cornerRadiusEnd=6, color=ACCENT).encode(
+            x=alt.X("Season:N", sort=None, title=None, axis=alt.Axis(labelAngle=0)),
+            y=alt.Y("Rating:Q", title=None, scale=alt.Scale(domain=[low, 10])),
+            tooltip=["Season", alt.Tooltip("Rating:Q", format=".2f")])
+        with panel("seasons", "Average rating per season"):
+            st.altair_chart(style_chart(chart), use_container_width=True, theme=None)
 
 
-def render_binge(show: dict, followed: bool) -> None:
-    episodes = api(client.get_episodes, show["id"])
-    if not episodes:
-        st.info("No episodes to plan.")
-        return
+def render_binge(show: dict, episodes: list[dict], followed: bool) -> None:
     today = date.today()
     aired = [ep for ep in episodes if logic.is_aired(ep, today)]
-    not_aired = len(episodes) - len(aired)
     if not aired:
-        st.info("No episode has aired yet.")
+        empty_state("No episode has aired yet.")
         return
 
-    options = ["From the first episode", "From an episode I choose"]
-    if followed:
-        options.insert(1, "From my next unwatched episode")
-    start_mode = st.radio("Start", options, horizontal=True, key=f"bstart_{show['id']}")
-    if start_mode == "From my next unwatched episode":
-        upcoming = tracker.next_unwatched(aired, tracker.watched_ids(data, show["id"]))
-        if upcoming is None:
-            st.success("You have watched every aired episode.")
-            return
-        start_index = aired.index(upcoming)
-    elif start_mode == "From an episode I choose":
-        chosen = st.selectbox("First episode", aired, key=f"bep_{show['id']}",
-                              format_func=lambda ep: f"{logic.episode_code(ep)} · {ep['name']}")
-        start_index = aired.index(chosen)
-    else:
-        start_index = 0
-
-    c1, c2, c3 = st.columns(3)
-    minutes = c1.number_input("Minutes per day", min_value=10, max_value=1440, value=90, step=15, key=f"bmin_{show['id']}")
-    days = c2.multiselect("Viewing days", WEEKDAYS, default=WEEKDAYS, key=f"bdays_{show['id']}")
-    start_date = c3.date_input("Start date", value=today, key=f"bdate_{show['id']}")
+    with panel("binge", "Plan your binge", "When will you be done if you watch a little every day?"):
+        options = ["From the first episode", "From an episode I choose"]
+        if followed:
+            options.insert(1, "From my next unwatched episode")
+        start_mode = st.radio("Start", options, horizontal=True, key=f"bstart_{show['id']}",
+                              label_visibility="collapsed")
+        if start_mode == "From my next unwatched episode":
+            upcoming = tracker.next_unwatched(aired, tracker.watched_ids(data, show["id"]))
+            if upcoming is None:
+                st.success("You have watched every aired episode.")
+                return
+            start_index = aired.index(upcoming)
+        elif start_mode == "From an episode I choose":
+            chosen = st.selectbox("First episode", aired, key=f"bep_{show['id']}",
+                                  format_func=lambda ep: f"{logic.episode_code(ep)} · {ep['name']}")
+            start_index = aired.index(chosen)
+        else:
+            start_index = 0
+        c1, c2, c3 = st.columns([1, 1.6, 1])
+        minutes = c1.number_input("Minutes per day", min_value=10, max_value=1440, value=90, step=15,
+                                  key=f"bmin_{show['id']}")
+        days = c2.pills("Viewing days", WEEKDAYS, selection_mode="multi", default=WEEKDAYS,
+                        key=f"bdays_{show['id']}") or []
+        start_date = c3.date_input("Start date", value=today, key=f"bdate_{show['id']}")
     try:
         plan = logic.binge_plan(aired[start_index:], int(minutes), [WEEKDAYS.index(d) for d in days], start_date,
                                 fallback_runtime=show.get("averageRuntime") or show.get("runtime"))
     except ValueError as exc:
         st.warning(str(exc))
         return
-
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Episodes", plan["episodes"])
-    m2.metric("Total watch time", logic.format_minutes(plan["total_minutes"]))
-    m3.metric("Viewing days", plan["viewing_days"])
-    m4.metric("You finish on", plan["finish_date"].strftime("%a %d %b %Y"))
+    spacer("small")
+    kpis([
+        ("You finish on", f'{plan["finish_date"].day} {plan["finish_date"]:%b %Y}', f'{plan["finish_date"]:%A}'),
+        ("Episodes", str(plan["episodes"]), f"from {logic.episode_code(aired[start_index])}"),
+        ("Total watch time", logic.format_minutes(plan["total_minutes"]), "without breaks"),
+        ("Viewing days", str(plan["viewing_days"]), f"{int(minutes)} min each"),
+    ])
+    not_aired = len(episodes) - len(aired)
     if not_aired:
         st.caption(f"{not_aired} announced episode(s) that have not aired yet are not counted.")
+
+
+def person_card(container, key: str, person: dict, lines: list[str]) -> None:
+    card = container.container(key=f"card-{key}", width=176)
+    html_block(poster_html(person, round_=True, fallback="👤")
+               + f'<div class="card-title center">{esc(person["name"])}</div>'
+               + "".join(f'<div class="card-sub center">{line}</div>' for line in lines), card)
 
 
 def render_cast(show: dict) -> None:
     cast = api(client.get_cast, show["id"])
     if not cast:
-        st.info("TVmaze lists no cast for this show.")
+        empty_state("TVmaze lists no cast for this show.")
         return
-    st.dataframe(
-        pd.DataFrame([{"Actor": m["person"]["name"], "Character": m["character"]["name"]} for m in cast]),
-        hide_index=True, use_container_width=True,
-    )
+    grid = st.container(horizontal=True, gap="medium", key="castgrid")
+    for i, member in enumerate(cast):
+        person_card(grid, f"cast-{i}", member["person"], [f'as {esc(member["character"]["name"])}'])
 
 
-# ----------------------------------------------------------------- my shows
+# =================================================================== my shows
 
 def page_my_shows() -> None:
-    st.title("My shows")
+    html_block('<div class="hero"><p class="eyebrow">My shows</p><h1>Pick up where you left off.</h1>'
+               '<p class="sub">Shows you follow, what you have watched, and what airs next.</p></div>')
     key = "spoiler_toggle"
     if key not in st.session_state:
         st.session_state[key] = data["settings"]["spoiler_free"]
@@ -338,11 +458,14 @@ def page_my_shows() -> None:
         data["settings"]["spoiler_free"] = st.session_state[key]
         save_tracker()
 
-    st.toggle("Spoiler-free mode (hide summaries of episodes you have not reached)", key=key, on_change=on_spoiler_change)
+    _, mid, _ = st.columns([1, 2, 1])
+    mid.toggle("Spoiler-free mode: hide summaries of episodes I have not reached", key=key, on_change=on_spoiler_change)
+    spacer("small")
 
     if not data["shows"]:
-        st.info("You follow no shows yet. Open a show and press Follow.")
+        empty_state("You follow no shows yet. Open a show and press “Follow this show”.")
     today = date.today()
+    grid = st.container(horizontal=True, gap="medium", key="mygrid")
     for show_id_str, entry in list(data["shows"].items()):
         show_id = int(show_id_str)
         show = api(client.get_show, show_id, embed=["nextepisode"])
@@ -352,46 +475,47 @@ def page_my_shows() -> None:
         aired = [ep for ep in episodes if logic.is_aired(ep, today)]
         watched = set(entry["watched"])
         done, total = tracker.progress(aired, watched)
-        with st.container(border=True):
-            cols = st.columns([1, 5, 1])
-            image = (show.get("image") or {}).get("medium")
-            if image:
-                cols[0].image(image, width=80)
-            with cols[1]:
-                st.subheader(show["name"])
-                st.progress(done / total if total else 0.0, text=f"{done} of {total} aired episodes watched")
-                upcoming = tracker.next_unwatched(aired, watched)
-                st.write(f"Up next: **{logic.episode_code(upcoming)} · {upcoming['name']}**" if upcoming
-                         else "You are up to date.")
-                nxt = show.get("_embedded", {}).get("nextepisode")
-                if nxt:
-                    st.caption(f"Next new episode airs {nxt.get('airdate') or 'TBA'}: {logic.episode_code(nxt)} “{nxt['name']}”")
-            cols[2].button("Open", key=f"my_open_{show_id}", on_click=open_show, args=(show_id,))
+        upcoming = tracker.next_unwatched(aired, watched)
+        nxt = show.get("_embedded", {}).get("nextepisode")
+        card = grid.container(key=f"card-my-{show_id}", width=260)
+        up_next = (f'Up next: <b>{esc(logic.episode_code(upcoming))} · {esc(upcoming["name"])}</b>'
+                   if upcoming else "<b>You are up to date.</b>")
+        airs = f'<div class="card-sub" style="margin-top:4px">New episode {esc(nxt.get("airdate") or "TBA")}</div>' \
+            if nxt else ""
+        html_block(
+            poster_html(show)
+            + f'<div class="card-eyebrow">{esc(logic.channel_of(show))}</div>'
+            + f'<div class="card-title">{esc(show["name"])}</div>'
+            + f'<div class="progress"><div style="width:{(done / total * 100) if total else 0:.0f}%"></div></div>'
+            + f'<div class="card-sub">{done} of {total} aired episodes watched</div>'
+            + f'<div class="card-sub" style="margin-top:6px">{up_next}</div>{airs}', card)
+        card.button("Open", key=f"my_open_{show_id}", on_click=open_show, args=(show_id,), type="tertiary")
 
-    st.divider()
-    st.subheader("Backup")
-    st.download_button("Export tracker (JSON)", json.dumps(data, indent=2), file_name="tracker.json", mime="application/json")
-    upload = st.file_uploader("Import a tracker file", type="json")
-    if upload is not None and st.button("Replace my tracker with this file"):
-        try:
-            st.session_state.tracker = tracker.validate(json.loads(upload.read()))
-        except (ValueError, json.JSONDecodeError) as exc:
-            st.error(f"Could not import: {exc}")
-        else:
-            save_tracker()
-            st.success("Imported.")
-            st.rerun()
+    spacer("large")
+    with st.expander("Backup: export or import your tracker"):
+        st.download_button("Export tracker (JSON)", json.dumps(data, indent=2), file_name="tracker.json",
+                           mime="application/json")
+        upload = st.file_uploader("Import a tracker file", type="json")
+        if upload is not None and st.button("Replace my tracker with this file"):
+            try:
+                st.session_state.tracker = tracker.validate(json.loads(upload.read()))
+            except (ValueError, json.JSONDecodeError) as exc:
+                st.error(f"Could not import: {exc}")
+            else:
+                save_tracker()
+                st.success("Imported.")
+                st.rerun()
 
 
-# ---------------------------------------------------------------- crossover
+# ================================================================== crossover
 
 def page_crossover() -> None:
-    st.title("Cast crossover")
-    st.caption("Pick two shows and see which actors were in the main cast of both.")
-    c1, c2 = st.columns(2)
-    with c1:
+    html_block('<div class="hero"><p class="eyebrow">Cast crossover</p><h1>Who was in both?</h1>'
+               '<p class="sub">Pick two shows and see which actors were in the main cast of each.</p></div>')
+    c1, c2 = st.columns(2, gap="medium")
+    with c1, panel("show-a", "First show"):
         show_a = show_picker("First show", "xa")
-    with c2:
+    with c2, panel("show-b", "Second show"):
         show_b = show_picker("Second show", "xb")
     if not (show_a and show_b):
         return
@@ -402,34 +526,39 @@ def page_crossover() -> None:
     if cast_a is None or cast_b is None:
         return
     shared = logic.shared_cast(cast_a, cast_b)
+    spacer("medium")
     if not shared:
-        st.info(f"No shared main cast between {show_a['name']} and {show_b['name']}.")
+        empty_state(f"No shared main cast between {show_a['name']} and {show_b['name']}.")
     else:
-        st.success(f"{len(shared)} actor(s) in both shows")
-        st.dataframe(pd.DataFrame([
-            {"Actor": row["name"], f"In {show_a['name']}": row["character_a"], f"In {show_b['name']}": row["character_b"]}
-            for row in shared
-        ]), hide_index=True, use_container_width=True)
-    st.caption("Main cast only: guest roles would need one API call per episode.")
+        html_block(f'<p class="panel-title center">{len(shared)} actor{"s" if len(shared) != 1 else ""} '
+                   f'in both shows</p><p class="panel-sub center">Main cast only</p>')
+        grid = st.container(horizontal=True, gap="medium", horizontal_alignment="center", key="sharedgrid")
+        for row in shared:
+            person_card(grid, f"shared-{row['person_id']}", {"name": row["name"], "image": row["image"]},
+                        [f'{esc(row["character_a"])} <span class="muted">in {esc(show_a["name"])}</span>',
+                         f'{esc(row["character_b"])} <span class="muted">in {esc(show_b["name"])}</span>'])
+    st.caption("Guest roles are not included: they would need one API call per episode.")
 
 
-# -------------------------------------------------------------- six degrees
+# ================================================================ six degrees
 
 def page_six_degrees() -> None:
-    st.title("Six degrees of TV")
-    st.caption("Connect two actors through shows they were in the main cast of: actor → show → actor → …")
-    c1, c2 = st.columns(2)
-    with c1:
+    html_block('<div class="hero"><p class="eyebrow">Six degrees of TV</p><h1>How are they connected?</h1>'
+               '<p class="sub">Link two actors through shows they starred in: actor → show → actor → …</p></div>')
+    c1, c2 = st.columns(2, gap="medium")
+    with c1, panel("person-a", "First actor"):
         person_a = person_picker("First actor", "pa")
-    with c2:
+    with c2, panel("person-b", "Second actor"):
         person_b = person_picker("Second actor", "pb")
-    c3, c4 = st.columns(2)
-    max_shows = c3.slider("Maximum shows in the chain", 1, 3, 3)
-    budget = c4.slider("Maximum API calls", 20, 300, 150, step=10,
-                       help="Each step costs one call; TVmaze allows about 20 calls per 10 seconds.")
+    with st.expander("Search settings"):
+        s1, s2 = st.columns(2)
+        max_shows = s1.slider("Maximum shows in the chain", 1, 3, 3)
+        budget = s2.slider("Maximum API calls", 20, 300, 150, step=10,
+                           help="Each step costs one call; TVmaze allows about 20 calls per 10 seconds.")
     if not (person_a and person_b):
         return
-    if st.button("Find connection", type="primary"):
+    _, mid, _ = st.columns([2, 1, 2])
+    if mid.button("Find connection", type="primary", width="stretch", key="find"):
         bar = st.progress(0.0, text="Searching…")
         result = api(
             logic.find_connection,
@@ -447,18 +576,20 @@ def page_six_degrees() -> None:
     status = result["status"]
     if status == "found":
         shows = sum(node["kind"] == "show" for node in result["path"])
-        st.success(f"Connected through {shows} show(s) after {result['expansions']} lookups")
-        parts = [f"**{n['name']}**" if n["kind"] == "person" else f"📺 *{n['name']}*" for n in result["path"]]
-        st.markdown(" → ".join(parts))
+        st.success(f"Connected through {shows} show{'s' if shows != 1 else ''} after {result['expansions']} lookups")
+        parts = [f'<span class="node {n["kind"]}">{"📺 " if n["kind"] == "show" else ""}{esc(n["name"])}</span>'
+                 for n in result["path"]]
+        html_block('<div class="chain">' + '<span class="arrow">→</span>'.join(parts) + "</div>")
     elif status == "budget":
-        st.warning(f"No connection found within {result['expansions']} lookups. Raise the API call limit and try again.")
+        st.warning(f"No connection found within {result['expansions']} lookups. Raise the API call limit in "
+                   "Search settings and try again.")
     elif status == "too_far":
         st.warning("These two are not connected within the maximum number of shows.")
     else:
         st.info("No connection exists through main-cast roles.")
 
 
-# ------------------------------------------------------------ higher/lower
+# ============================================================= higher / lower
 
 def new_round() -> None:
     game = st.session_state.game
@@ -486,8 +617,8 @@ def restart() -> None:
 
 
 def page_game() -> None:
-    st.title("Higher or lower")
-    st.caption("Which show has the higher TVmaze rating? One wrong guess ends your streak.")
+    html_block('<div class="hero"><p class="eyebrow">Higher or lower</p><h1>Which one rates higher?</h1>'
+               '<p class="sub">Guess which show has the better TVmaze rating. One wrong guess ends your streak.</p></div>')
     if "game" not in st.session_state:
         shows = []
         for page in (0, 1, 2):
@@ -496,45 +627,47 @@ def page_game() -> None:
         if len(pool) < 2:
             st.error("Could not load enough shows to play.")
             return
-        st.session_state.game = {"pool": pool, "rng": random.Random(), "seen": set(), "score": 0, "pair": None, "answer": None}
+        st.session_state.game = {"pool": pool, "rng": random.Random(), "seen": set(), "score": 0,
+                                 "pair": None, "answer": None}
         new_round()
 
     game = st.session_state.game
-    s1, s2 = st.columns(2)
-    s1.metric("Streak", game["score"])
-    s2.metric("Best ever", data["settings"]["game_best"])
+    kpis([("Current streak", str(game["score"]), "correct in a row"),
+          ("Best ever", str(data["settings"]["game_best"]), "saved on this computer")])
 
-    cols = st.columns(2)
-    for col, show, choice in zip(cols, game["pair"], ("a", "b")):
-        with col, st.container(border=True):
-            st.subheader(show["name"])
-            st.caption(f"{logic.year_of(show)} · {logic.channel_of(show)} · {', '.join(show.get('genres') or [])}")
-            image = (show.get("image") or {}).get("medium")
-            if image:
-                st.image(image, width=160)
-            if game["answer"] is None:
-                st.button("This one is rated higher", key=f"guess_{choice}", on_click=guess, args=(choice,))
-            else:
-                st.metric("Rating", logic.rating_of(show))
+    left, vs, right = st.columns([5, 1, 5], gap="medium")
+    for col, show, choice in ((left, game["pair"][0], "a"), (right, game["pair"][1], "b")):
+        card = col.container(key=f"card-game-{choice}")
+        html_block(poster_html(show) + f'<div class="card-eyebrow center">{esc(logic.channel_of(show))} · {esc(logic.year_of(show))}</div>'
+                   f'<div class="card-title center" style="font-size:1.25rem">{esc(show["name"])}</div>'
+                   f'<div class="center">{pills(*(show.get("genres") or [])[:3], kind="blue")}</div>', card)
+        if game["answer"] is None:
+            card.button("This one is rated higher", key=f"guess_{choice}", on_click=guess, args=(choice,),
+                        type="primary")
+        else:
+            html_block(f'<div class="reveal">★ {logic.rating_of(show):.1f}</div>', card)
+    html_block('<div class="vs">vs</div>', vs)
 
-    if game["answer"] is True:
-        st.success("Correct!")
-        st.button("Next round", on_click=new_round, type="primary")
-    elif game["answer"] is False:
-        st.error(f"Wrong. Your streak was {game['score']}.")
-        st.button("Play again", on_click=restart, type="primary")
+    if game["answer"] is not None:
+        _, mid, _ = st.columns([2, 1.2, 2])
+        if game["answer"]:
+            html_block('<div class="result ok">Correct!</div>', mid)
+            mid.button("Next round", on_click=new_round, type="primary", width="stretch")
+        else:
+            html_block(f'<div class="result bad">Wrong. Your streak was {game["score"]}.</div>', mid)
+            mid.button("Play again", on_click=restart, type="primary", width="stretch")
 
 
-# -------------------------------------------------------------------- about
+# ===================================================================== about
 
 def page_about() -> None:
-    st.title("About")
-    st.markdown(
-        """
-TV Show Explorer is built on the free [TVmaze API](https://www.tvmaze.com/api).
-Every request goes through one client (`tvmaze/client.py`) that caches responses for an hour,
-keeps to 18 calls per 10 seconds and retries when TVmaze answers *429 Too Many Requests*.
-
+    html_block('<div class="hero"><p class="eyebrow">About</p><h1>How it works.</h1>'
+               '<p class="sub">Built on the free TVmaze API. No account, no API key.</p></div>')
+    with panel("about", "One client for every call",
+               "tvmaze/client.py caches responses for an hour, keeps to 18 calls per 10 seconds, and retries "
+               "when TVmaze answers 429 Too Many Requests."):
+        st.markdown(
+            """
 | Feature | TVmaze endpoints |
 |---|---|
 | Search, show page | `/search/shows`, `/shows/:id?embed[]=nextepisode` |
@@ -542,27 +675,27 @@ keeps to 18 calls per 10 seconds and retries when TVmaze answers *429 Too Many R
 | Cast, crossover | `/shows/:id/cast` |
 | Six degrees | `/search/people`, `/people/:id/castcredits?embed=show`, `/shows/:id/cast` |
 | Higher or lower | `/shows?page=N` |
-
-Your followed shows and watched episodes are stored locally in `data/tracker.json`.
-
-Data: [TVmaze](https://www.tvmaze.com), licensed under
-[CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/).
-"""
-    )
-    st.caption(f"Network calls made by this app since it started: {client.network_calls}")
+""")
+        st.caption(f"Your followed shows and watched episodes are stored locally in data/tracker.json. "
+                   f"Network calls made since the app started: {client.network_calls}")
 
 
-# ---------------------------------------------------------------- navigation
+# ================================================================ navigation
 
-st.sidebar.title("TV Show Explorer")
-page = st.sidebar.radio("Go to", PAGES, key="page")
-st.sidebar.caption("Data from [TVmaze](https://www.tvmaze.com) (CC BY-SA 4.0)")
+st.markdown(f"<style>{(HERE / 'style.css').read_text(encoding='utf-8')}</style>", unsafe_allow_html=True)
+html_block('<div class="brand">📺 TV Show <span>Explorer</span></div>')
+nav = st.container(key="nav")
+page = nav.radio("Navigation", PAGES, key="page", horizontal=True, label_visibility="collapsed")
 
 {
-    PAGES[0]: page_search,
-    PAGES[1]: page_my_shows,
-    PAGES[2]: page_crossover,
-    PAGES[3]: page_six_degrees,
-    PAGES[4]: page_game,
-    PAGES[5]: page_about,
+    "Search": page_search,
+    "My shows": page_my_shows,
+    "Crossover": page_crossover,
+    "Six degrees": page_six_degrees,
+    "Higher or lower": page_game,
+    "About": page_about,
 }[page]()
+
+html_block('<div class="foot">Data from <a href="https://www.tvmaze.com" target="_blank">TVmaze</a>, '
+           'licensed under <a href="https://creativecommons.org/licenses/by-sa/4.0/" target="_blank">CC BY-SA 4.0</a>.'
+           '</div>')

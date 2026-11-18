@@ -148,7 +148,7 @@ def shared_cast(cast_a: list[dict], cast_b: list[dict]) -> list[dict]:
         out: dict[int, dict] = {}
         for member in cast:
             person = member["person"]
-            entry = out.setdefault(person["id"], {"name": person["name"], "characters": []})
+            entry = out.setdefault(person["id"], {"name": person["name"], "image": person.get("image"), "characters": []})
             entry["characters"].append(member["character"]["name"])
         return out
 
@@ -157,6 +157,7 @@ def shared_cast(cast_a: list[dict], cast_b: list[dict]) -> list[dict]:
         {
             "person_id": pid,
             "name": a[pid]["name"],
+            "image": a[pid]["image"],
             "character_a": ", ".join(a[pid]["characters"]),
             "character_b": ", ".join(b[pid]["characters"]),
         }

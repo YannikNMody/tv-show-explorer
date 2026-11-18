@@ -1,6 +1,6 @@
 # TV Show Explorer
 
-A Streamlit web app built on the free [TVmaze API](https://www.tvmaze.com/api). Search any TV show, list **all of its episodes**, and do more with that data than the API offers on its own: rating heatmaps, a binge planner, a watch tracker, cast crossovers, "six degrees" between actors and a small game.
+A Streamlit web app with an Apple-inspired design, built on the free [TVmaze API](https://www.tvmaze.com/api). Search any TV show, list **all of its episodes**, and do more with that data than the API offers on its own: rating heatmaps, a binge planner, a watch tracker, cast crossovers, "six degrees" between actors and a small game.
 
 ## Features
 
@@ -53,6 +53,8 @@ TVmaze is a read-only REST API: every endpoint is a `GET` that returns JSON. The
 
 ```
 app.py                  Streamlit UI: all pages and navigation
+style.css               Apple-inspired design: system font, light grey canvas, white cards, one blue accent
+.streamlit/config.toml  Streamlit theme matching style.css
 tvmaze/client.py        HTTP client: endpoints, cache, throttle, retries, errors
 tvmaze/logic.py         Pure functions: episode grouping, heatmap, binge plan, crossover, six degrees, game
 tvmaze/tracker.py       Watch tracker stored in data/tracker.json (git-ignored)
@@ -76,12 +78,12 @@ The split keeps the logic testable: `logic.py` and `tracker.py` never touch the 
 python -m pytest -q
 ```
 
-44 tests, no internet needed:
+46 tests, no internet needed:
 
 - `test_client.py`: a fake HTTP session checks caching, cache expiry, throttling, 429 retries, 404s and network errors.
 - `test_logic.py`: episode grouping, heatmap data, binge maths, crossover, six degrees on a small fake TV world, game rules.
 - `test_tracker.py`: saving, loading, corrupt files, follow / watched / progress.
-- `test_app.py`: runs the Streamlit app against a fake TVmaze and clicks through search → show → all episodes, following and ticking episodes, and every other page.
+- `test_app.py`: runs the Streamlit app against a fake TVmaze and clicks through search → show → all episodes (with and without specials), following and ticking episodes, crossover, six degrees, the game and every other page.
 
 ## Credits
 
