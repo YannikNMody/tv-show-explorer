@@ -17,7 +17,7 @@ A Streamlit web app with an Apple-inspired design, built on the free [TVmaze API
 
 ## Run it
 
-Needs Python 3.10 or newer.
+Needs Python 3.11 or newer.
 
 ```bash
 python -m venv .venv
