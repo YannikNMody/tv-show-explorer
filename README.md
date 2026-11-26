@@ -2,8 +2,8 @@
 
 Search any TV show, list **all of its episodes**, and explore the data further: rating heatmaps, a binge planner, a watch tracker, cast crossovers, "six degrees" between actors and a small game. A Streamlit app built on the free [TVmaze API](https://www.tvmaze.com/api).
 
-<!-- SCREENSHOT: docs/screenshots/episodes.png (show page, "All episodes" tab) -->
-<!-- ![A show page with the All episodes tab open](docs/screenshots/episodes.png) -->
+![A show page with the All episodes tab open](docs/screenshots/episodes.png)
+*A show page: key figures, tabs, and every episode grouped by season*
 
 ## Purpose
 
@@ -61,6 +61,9 @@ The app opens in the browser, with a navigation bar at the top:
 4. **Six degrees:** choose two actors and see the chain of shows connecting them.
 5. **Higher or lower:** guess which show is rated higher; one wrong guess ends the streak.
 6. **About:** how the app works and the TVmaze credit.
+
+![The rating heatmap tab](docs/screenshots/heatmap.png)
+*Rating heatmap: one cell per episode, coloured from lowest to highest rating*
 
 ## Setup
 
@@ -130,6 +133,7 @@ tvmaze/logic.py         Pure functions: episode grouping, heatmap, binge plan, c
 tvmaze/tracker.py       Watch tracker stored in data/tracker.json (git-ignored)
 tests/                  pytest suite, runs without internet
 .github/workflows/      Runs the tests on every push
+docs/screenshots/       Screenshots used in this README
 ```
 
 The split keeps the logic testable: `logic.py` and `tracker.py` never touch the network or Streamlit.
