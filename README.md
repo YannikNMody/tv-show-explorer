@@ -92,11 +92,19 @@ Tested with Streamlit 1.67.0, requests 2.34.2, pandas 3.1.1 and pytest 9.2.0, on
 
 ## Learning
 
-<!-- TODO (Yannik): write this section yourself, in your own words. -->
-<!-- 1. Big picture: understanding the API's design first (what exists, how the data fits together, its rules) before deciding what to build on top of it. -->
-<!-- 2. Challenge: the version mismatch (Python 3.9 on macOS vs. the Streamlit version the design needed) and how it was solved. -->
+**Understanding the API before building on it**
 
-_To be written._
+- Before deciding what to build, I went through the TVmaze API first: which endpoints exist, how shows, seasons, episodes and people connect, and which rules apply (no key, read-only, about 20 calls per 10 seconds, data cached for an hour, CC BY-SA attribution).
+- Every object has an ID, so most features are chained calls: search, take the ID, fetch the details. `?embed=` lets one call replace several.
+- The most useful part was what the API *cannot* do: no filtering, no recommendations, no user accounts and no "watched" state. Those gaps became my features (watch tracker, binge plan, heatmap), built on top of the required episode list.
+- The rules shaped the code: one client handles every call (throttle, cache, retries on 429), six degrees has a call budget, and crossover uses only the main cast, because guest roles would need one call per episode.
+
+**Challenge: it worked elsewhere and broke on my Mac**
+
+- After the redesign, the tests passed where the code was written and on GitHub, but on my Mac a page crashed (`st.space` did not exist) and a test failed.
+- The cause was my environment: it had been created with macOS's built-in Python 3.9, so only an older Streamlit version could be installed.
+- I recreated the environment with Python 3.14, set Streamlit 1.67 as the minimum in `requirements.txt`, and corrected the Python version in the README.
+- Lessons: pin the versions you actually tested with, from the start. And once a commit is pushed, fix it with a new commit instead of rewriting history.
 
 ## Limitations and assistance
 
@@ -112,7 +120,7 @@ _To be written._
 
 **AI assistance**
 
-All code in this project was written by AI. I used Claude chat (Opus 5.5) to brainstorm, plan the features and design, and write implementation prompts and guidelines; for this project the chat also wrote much of the code directly. Claude Code (Sonnet 5) implemented, ran, tested and committed the changes in my repository. My part was deciding what to build, making the calls when trade-offs came up, testing the results by hand, and reviewing what went into the repo. Commits made by Claude during submission prep are authored as "Claude".
+All code in this project was written by AI. I used Claude chat (Opus 5.5) to brainstorm, plan the features and design, and write implementation prompts and guidelines; for this project the chat also wrote much of the code directly. Claude Code (Sonnet 5) implemented, ran, tested and committed the changes in my repository. My part was deciding what to build, making the calls when trade-offs came up, testing the results by hand, and reviewing what went into the repo. Commits made by Claude during submission prep are authored as "Claude". The README text, including the Learning section, was drafted by Claude from my project chats and notes; I reviewed and approved it.
 
 **Other sources**
 
