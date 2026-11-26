@@ -6,3 +6,11 @@ venv/
 .DS_Store
 # personal watch-tracker data stays on your machine
 data/
+
+# Local secrets and editor settings: not used by this project today,
+# ignored so they can never be committed by accident
+.env
+.env.*
+.streamlit/secrets.toml
+.vscode/
+.idea/
